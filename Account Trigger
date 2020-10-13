@@ -1,0 +1,72 @@
+trigger AccountTrigger on Account (before insert, before update, after update) {
+    if(Trigger.isBefore && Trigger.isUpdate){
+        //AccountTriggerHandler.checkActiveDate(Trigger.new);
+        
+        Set<String> orgIdCountUpdates = new Set<String>();
+        
+        for(Account a : Trigger.new){
+            Account oldAcc = Trigger.oldMap.get(a.Id);
+            
+            if(oldAcc.Org_Id__c != a.Org_Id__c){
+                if(oldAcc.Org_ID__c != 'PENDING ORG ID' && oldAcc.Org_ID__c != Null){
+                    orgIdCountUpdates.add(oldAcc.Org_ID__c);
+                }
+                if(a.Org_ID__c != 'PENDING ORG ID' && a.Org_ID__c != Null){
+                    orgIdCountUpdates.add(a.Org_ID__c);
+                }
+            }
+        }
+        
+        if(orgIdCountUpdates.size() > 0){
+            if(System.isFuture() || System.isBatch()){
+                LM_FeatureFlagHelper.getOrgIdCount(orgIdCountUpdates);
+            }
+            else {
+                LM_FeatureFlagHelper.asyncGetOrgIdCount(orgIdCountUpdates);
+            }
+        }
+    }
+    
+    if(Trigger.isAfter && Trigger.isUpdate){
+        
+        Set<Id> syncContactIds = new Set<Id>();
+        Set<Id> superAccountIds = new Set<Id>();
+        
+        for(Account a : Trigger.new){
+            Account oldAcc = Trigger.oldMap.get(a.Id);
+            Boolean isSyncAccount = oldAcc.Most_Recent_Channel__c != a.Most_Recent_Channel__c || oldAcc.Contract_End_Date_Count__c != a.Contract_End_Date_Count__c
+                || oldAcc.LM_FF_Override__c  != a.LM_FF_Override__c || oldAcc.ADM_Overuse_Margin__c != a.ADM_Overuse_Margin__c 
+                || oldAcc.TCR_Overuse_Margin__c != a.TCR_Overuse_Margin__c || oldAcc.Org_Id_Count__c  != a.Org_Id_Count__c
+                || (oldAcc.Max_Contract_Date_roll__c != a.Max_Contract_Date_roll__c && a.Max_Contract_Date_roll__c != Null);
+            if(isSyncAccount){
+                syncContactIds.add(a.Id);
+            }
+            
+            Boolean isSyncSuper = oldAcc.ADM_License_Total_SnapShot__c != a.ADM_License_Total_SnapShot__c 
+                || oldAcc.TCR_License_Total_Snapshot__c != a.TCR_License_Total_Snapshot__c 
+                || oldAcc.BCN_License_Total_Snapshot__c != a.BCN_License_Total_Snapshot__c;
+            if(isSyncSuper){
+                superAccountIds.add(a.SuperAccount__c);
+            }
+            Boolean syncBothSupers = oldAcc.SuperAccount__c != a.SuperAccount__c;
+            if(syncBothSupers){
+                superAccountIds.add(a.SuperAccount__c);
+                superAccountIds.add(oldAcc.SuperAccount__c);
+            }
+        }
+        
+        // Updates for Appcues / Super Admins
+        if(syncContactIds.size() > 0){
+            if(System.isBatch() || System.isFuture()){
+                AccountContactSync.syncContacts(new List<Id>(syncContactIds));
+            }
+            else {
+                AccountContactSync.futureSyncContacts(new List<Id>(syncContactIds));
+            }
+            
+        }
+        if(superAccountIds.size() > 0){
+            SuperAccountHelper.syncSuperAccountDates(new List<Id>(superAccountIds));
+        }
+    }
+}
